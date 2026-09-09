@@ -20,6 +20,7 @@
 
 html {
   scroll-behavior: smooth;
+  overflow-x: hidden;
 }
 body {
   background: var(--paper);
@@ -845,8 +846,13 @@ footer-content {
   transform: none;
 }
 @media (max-width: 800px) {
+  header .cta-btn {
+    display: none !important;
+  }
   nav {
     min-height: 72px;
+    width: calc(100% - 2rem);
+    max-width: 100%;
   }
   .nav-toggle {
     display: block;

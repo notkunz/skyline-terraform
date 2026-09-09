@@ -28,6 +28,10 @@ body {
   line-height: 1.6;
   overflow-x: hidden;
 }
+img {
+  display: block;
+  max-width: 100%;
+}
 body::before {
   content: "";
   position: fixed;
@@ -787,7 +791,7 @@ nav li a.active {
   font-size: 0.75rem;
   margin-top: 0.35rem;
 }
-+ footer {
+footer {
   padding: 4rem 5% 1.5rem;
   color: white;
   background: var(--ink);
@@ -829,7 +833,7 @@ footer-content {
   color: rgba(255, 255, 255, 0.38);
   font-size: 0.65rem;
 }
-+ .fade-in {
+.fade-in {
   opacity: 0;
   transform: translateY(24px);
   transition:
@@ -840,7 +844,7 @@ footer-content {
   opacity: 1;
   transform: none;
 }
-+ @media (max-width: 800px) {
+@media (max-width: 800px) {
   nav {
     min-height: 72px;
   }
@@ -947,7 +951,7 @@ footer-content {
     gap: 2rem;
   }
 }
-+ @media (max-width: 520px) {
+@media (max-width: 520px) {
   .hero-buttons {
     flex-direction: column;
     align-items: stretch;
@@ -1003,7 +1007,7 @@ footer-content {
     grid-template-columns: 1fr;
   }
 }
-+ @media (prefers-reduced-motion: reduce) {
+@media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {

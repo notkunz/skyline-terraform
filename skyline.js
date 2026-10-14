@@ -329,6 +329,88 @@ const showServiceModal = (card) => {
   document.addEventListener("keydown", closeOnEsc);
 };
 
+// ============ ADMIN PANEL INITIALIZATION ============
+const initializeAdminPanel = () => {
+  loadStaff();
+  setupTabSwitching();
+  setupStaffForm();
+};
+
+// ============ TAB SWITCHING ============
+const setupTabSwitching = () => {
+  window.switchTab = (tabName) => {
+    document.querySelectorAll(".tab-content").forEach((tab) => {
+      tab.classList.remove("active");
+    });
+    document.querySelectorAll(".tab-btn").forEach((btn) => {
+      btn.classList.remove("active");
+    });
+
+    document.getElementById(tabName + "-tab").classList.add("active");
+    event.target.classList.add("active");
+
+    if (tabName === "list") {
+      loadStaff();
+    }
+  };
+};
+
+// ============ SUPABASE CONFIG ============
+const SUPABASE_URL = "YOUR_SUPABASE_URL";
+const SUPABASE_KEY = "YOUR_SUPABASE_ANON_KEY";
+const supabase = window.supabase?.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+if (!supabase) {
+  console.warn(
+    "Supabase not initialized. Add Supabase script to HTML head.",
+  );
+}
+
+// ============ ADD STAFF FORM ============
+const setupStaffForm = () => {
+  window.addStaff = async () => {
+    const name = document.getElementById("staffName").value;
+    const position = document.getElementById("staffPosition").value;
+    const email = document.getElementById("staffEmail").value;
+    const phone = document.getElementById("staffPhone").value;
+    const photoFile = document.getElementById("staffPhoto").files[0];
+
+    if (!name || !position || !email || !phone || !photoFile) {
+      showNotification("Please fill all fields", "error");
+      return;
+    }
+
+    if (!isValidEmail(email)) {
+      showNotification("Please enter a valid email", "error");
+      return;
+    }
+
+    try {
+      // Upload photo
+      const fileName = `${Date.now()}_${photoFile.name}`;
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from("staff-photos")
+        .upload(fileName, photoFile);
+
+      if (uploadError) throw uploadError;
+
+      const photoUrl = `${SUPABASE_URL}/storage/v1/object/public/staff-photos/${fileName}`;
+
+      // Insert to database
+      const { data, error } = await supabase
+        .from("staff")
+        .insert([{ name, position, email, phone, photo_url: photoUrl }])
+        .select();
+
+      if (error) throw error;
+
+      showNotification("Staff member added successfully!", "success");
+      document.querySelector(".add-staff-form").reset();
+      loadStaff();
+
+      // Switch to list tab
+      document.getElementById("list-tab").classLis
+      
 // ============ CAROUSEL FUNCTIONALITY ============
 const initializeCarousel = () => {
   const track = document.querySelector(".carousel-track");

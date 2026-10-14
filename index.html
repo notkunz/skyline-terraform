@@ -15,6 +15,7 @@
     />
     <title>Skyline Terraform | Built with intent</title>
     <link rel="stylesheet" href="skyline.css?v=2" />
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   </head>
   <body>
     <!-- HEADER -->
@@ -513,6 +514,59 @@
               <p>Monday - Friday: 9AM - 6PM<br />Saturday: 10AM - 3PM</p>
             </div>
           </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ADMIN PANEL -->
+    <section class="admin-panel" id="admin">
+      <div class="admin-container">
+        <h2>Staff Management</h2>
+
+        <div class="admin-tabs">
+          <button class="tab-btn active" onclick="switchTab('add')">
+            Add Staff
+          </button>
+          <button class="tab-btn" onclick="switchTab('list')">
+            Staff Directory
+          </button>
+        </div>
+
+        <div id="add-tab" class="tab-content active">
+          <div class="add-staff-form">
+            <input
+              type="text"
+              id="staffName"
+              placeholder="Full Name"
+              required
+            />
+            <input
+              type="text"
+              id="staffPosition"
+              placeholder="Position/Title"
+              required
+            />
+            <input
+              type="email"
+              id="staffEmail"
+              placeholder="Email Address"
+              required
+            />
+            <input
+              type="tel"
+              id="staffPhone"
+              placeholder="Phone Number"
+              required
+            />
+            <input type="file" id="staffPhoto" accept="image/*" required />
+            <button class="btn-primary" onclick="addStaff()">
+              Add Staff Member
+            </button>
+          </div>
+        </div>
+
+        <div id="list-tab" class="tab-content">
+          <div class="staff-list" id="staffList"></div>
         </div>
       </div>
     </section>

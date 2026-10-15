@@ -8,6 +8,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initializeScrollSpyNav();
   initializeCounterAnimation();
   initializeSmoothScroll();
+  initializeAdminPanel();
 });
 
 // ============ SCROLL ANIMATIONS ============
@@ -329,88 +330,504 @@ const showServiceModal = (card) => {
   document.addEventListener("keydown", closeOnEsc);
 };
 
-// ============ ADMIN PANEL INITIALIZATION ============
-const initializeAdminPanel = () => {
-  loadStaff();
-  setupTabSwitching();
-  setupStaffForm();
+// ============ STAFF ADMIN ============
+const STAFF_BUCKET = "staff-photos";
+const STAFF_TABLE = "staff";
+const LEGACY_STAFF_KEY = "skyline-staff-records";
+let supabaseClient;
+let activeStaff = [];
+
+const initializeAdminPanel = async () => {
+  const login = document.getElementById("adminLogin");
+  const staffForm = document.getElementById("staffForm");
+  const loginForm = document.getElementById("adminLoginForm");
+  if (!login || !staffForm || !loginForm) return;
+
+  const config = window.SKYLINE_SUPABASE_CONFIG;
+  if (
+    !window.supabase?.createClient ||
+    !config?.url ||
+    !config?.anonKey ||
+    !config?.adminUsername ||
+    !config?.adminEmail ||
+    config.url.includes("YOUR_") ||
+    config.anonKey.includes("YOUR_") ||
+    config.adminEmail.includes("YOUR_")
+  ) {
+    setAdminMessage(
+      "Set adminEmail in supabase-config.js and run supabase-setup.sql to enable admin sign-in.",
+      true,
+    );
+  } else {
+    supabaseClient = window.supabase.createClient(config.url, config.anonKey);
+  }
+
+  document.querySelectorAll("[data-admin-open]").forEach((link) => {
+    link.addEventListener("click", (event) => {
+      event.preventDefault();
+      if (!supabaseClient) {
+        document.getElementById("adminLogin").hidden = false;
+        return;
+      }
+      login.hidden = false;
+      document.getElementById("adminUsername").focus();
+    });
+  });
+  document
+    .querySelectorAll("[data-admin-close]")
+    .forEach((button) => button.addEventListener("click", closeAdmin));
+  login.addEventListener("click", (event) => {
+    if (event.target === login) closeAdmin();
+  });
+  loginForm.addEventListener("submit", signInAdmin);
+  staffForm.addEventListener("submit", addStaffRecord);
+  document
+    .getElementById("adminSignOut")
+    .addEventListener("click", signOutAdmin);
+
+  if (!supabaseClient) return;
+  const { data, error } = await supabaseClient.auth.getSession();
+  if (error) setAdminMessage(error.message, true);
+  else if (data.session) await showAdmin();
+  supabaseClient.auth.onAuthStateChange((_event, session) => {
+    window.setTimeout(() => (session ? showAdmin() : hideAdmin()), 0);
+  });
 };
 
-// ============ TAB SWITCHING ============
-const setupTabSwitching = () => {
-  window.switchTab = (tabName) => {
-    document.querySelectorAll(".tab-content").forEach((tab) => {
-      tab.classList.remove("active");
-    });
-    document.querySelectorAll(".tab-btn").forEach((btn) => {
-      btn.classList.remove("active");
-    });
+const closeAdmin = () => {
+  document.getElementById("adminLogin").hidden = true;
+  document.getElementById("adminLoginForm").reset();
+  setAdminMessage("");
+};
 
-    document.getElementById(tabName + "-tab").classList.add("active");
-    event.target.classList.add("active");
+const signInAdmin = async (event) => {
+  event.preventDefault();
+  if (!supabaseClient) return;
+  const button = event.currentTarget.querySelector('button[type="submit"]');
+  button.disabled = true;
+  setAdminMessage("Signing in...");
+  const enteredUsername = document.getElementById("adminUsername").value.trim();
+  if (enteredUsername.toLowerCase() !== configUsername().toLowerCase()) {
+    button.disabled = false;
+    setAdminMessage("Sign-in failed. Check your username and password.", true);
+    return;
+  }
+  const { error } = await supabaseClient.auth.signInWithPassword({
+    email: window.SKYLINE_SUPABASE_CONFIG.adminEmail,
+    password: document.getElementById("adminPassword").value,
+  });
+  button.disabled = false;
+  if (error) {
+    setAdminMessage(
+      "Supabase rejected the account credentials. Check adminEmail in supabase-config.js and confirm this Supabase Auth user has an email/password login.",
+      true,
+    );
+  } else {
+    closeAdmin();
+  }
+};
 
-    if (tabName === "list") {
-      loadStaff();
-    }
+const configUsername = () => window.SKYLINE_SUPABASE_CONFIG.adminUsername;
+
+const signOutAdmin = async () => {
+  const { error } = await supabaseClient.auth.signOut();
+  if (error) showNotification(error.message, "error");
+};
+
+const showAdmin = async () => {
+  closeAdmin();
+  document.getElementById("admin").hidden = false;
+  await migrateLegacyStaff();
+  await loadStaff();
+  document.getElementById("admin").scrollIntoView({ behavior: "smooth" });
+};
+
+const hideAdmin = () => {
+  document.getElementById("admin").hidden = true;
+  document.getElementById("printArea").replaceChildren();
+  activeStaff = [];
+  document.getElementById("staffList").replaceChildren();
+  document.getElementById("staffCount").textContent = "0 staff";
+};
+
+const setAdminMessage = (message, isError = false) => {
+  const target = document.getElementById("adminLoginMessage");
+  if (!target) return;
+  target.textContent = message;
+  target.classList.toggle("error", isError);
+};
+
+const setDataMessage = (message, isError = false) => {
+  const target = document.getElementById("adminDataMessage");
+  if (!target) return;
+  target.textContent = message;
+  target.classList.toggle("error", isError);
+};
+
+const addStaffRecord = async (event) => {
+  event.preventDefault();
+  const record = {
+    name: document.getElementById("staffName").value.trim(),
+    position: document.getElementById("staffPosition").value.trim(),
+    email: document.getElementById("staffEmail").value.trim() || null,
+    phone: document.getElementById("staffPhone").value.trim() || null,
+    staff_number:
+      document.getElementById("staffNumber").value.trim() ||
+      `ST-${crypto.randomUUID().replaceAll("-", "").slice(0, 12).toUpperCase()}`,
   };
+  const { error } = await supabaseClient.from(STAFF_TABLE).insert(record);
+  if (error) {
+    if (
+      error.code === "23505" &&
+      error.message.includes("staff_staff_number_key")
+    ) {
+      setDataMessage(
+        "That Staff ID is already in use. Enter a different ID, or clear the Staff ID field and submit to generate one automatically.",
+        true,
+      );
+    } else if (error.code === "42501") {
+      setDataMessage(
+        "Your account signed in but is not on the staff admin allowlist. Run supabase-setup.sql in Supabase SQL Editor, and confirm the admin email in that script matches supabase-config.js.",
+        true,
+      );
+    } else {
+      setDataMessage(`Could not add staff record: ${error.message}`, true);
+    }
+    return;
+  }
+  event.currentTarget.reset();
+  setDataMessage("Staff record saved to the Skyline database.");
+  await loadStaff();
 };
 
-// ============ SUPABASE CONFIG ============
-const SUPABASE_URL = "YOUR_SUPABASE_URL";
-const SUPABASE_KEY = "YOUR_SUPABASE_ANON_KEY";
-const supabase = window.supabase?.createClient(SUPABASE_URL, SUPABASE_KEY);
-
-if (!supabase) {
-  console.warn(
-    "Supabase not initialized. Add Supabase script to HTML head.",
+const loadStaff = async () => {
+  setDataMessage("Loading staff records...");
+  const { data, error } = await supabaseClient
+    .from(STAFF_TABLE)
+    .select(
+      "id, name, position, email, phone, staff_number, photo_path, created_at",
+    )
+    .order("created_at", { ascending: false });
+  if (error) {
+    setDataMessage(`Could not load staff: ${error.message}`, true);
+    return;
+  }
+  activeStaff = await Promise.all(
+    data.map(async (person) => {
+      if (!person.photo_path) return { ...person, photo_url: "" };
+      const { data: signed, error: photoError } = await supabaseClient.storage
+        .from(STAFF_BUCKET)
+        .createSignedUrl(person.photo_path, 3600);
+      return { ...person, photo_url: photoError ? "" : signed.signedUrl };
+    }),
   );
-}
+  setDataMessage("");
+  renderStaff();
+};
 
-// ============ ADD STAFF FORM ============
-const setupStaffForm = () => {
-  window.addStaff = async () => {
-    const name = document.getElementById("staffName").value;
-    const position = document.getElementById("staffPosition").value;
-    const email = document.getElementById("staffEmail").value;
-    const phone = document.getElementById("staffPhone").value;
-    const photoFile = document.getElementById("staffPhoto").files[0];
-
-    if (!name || !position || !email || !phone || !photoFile) {
-      showNotification("Please fill all fields", "error");
+const migrateLegacyStaff = async () => {
+  let legacy;
+  try {
+    legacy = JSON.parse(localStorage.getItem(LEGACY_STAFF_KEY) || "[]");
+  } catch {
+    legacy = [];
+  }
+  if (!Array.isArray(legacy) || !legacy.length) return;
+  setDataMessage("Importing staff records saved on this device...");
+  for (const person of legacy) {
+    const id = /^[\da-f-]{36}$/i.test(person.id)
+      ? person.id
+      : crypto.randomUUID();
+    let photoPath = null;
+    if (person.photo?.startsWith("data:image/")) {
+      try {
+        const image = await (await fetch(person.photo)).blob();
+        photoPath = `${id}/${crypto.randomUUID()}.jpg`;
+        const { error: uploadError } = await supabaseClient.storage
+          .from(STAFF_BUCKET)
+          .upload(photoPath, image, { contentType: "image/jpeg" });
+        if (uploadError) photoPath = null;
+      } catch {
+        photoPath = null;
+      }
+    }
+    const { error } = await supabaseClient.from(STAFF_TABLE).upsert(
+      {
+        id,
+        name: person.name,
+        position: person.position,
+        email: person.email || null,
+        phone: person.phone || null,
+        staff_number:
+          person.staffNumber || `ST-${String(Date.now()).slice(-6)}`,
+        photo_path: photoPath,
+      },
+      { onConflict: "id", ignoreDuplicates: true },
+    );
+    if (error) {
+      setDataMessage(
+        `Could not import old local records: ${error.message}`,
+        true,
+      );
       return;
     }
+  }
+  localStorage.removeItem(LEGACY_STAFF_KEY);
+  setDataMessage("Previous device records have been imported into Supabase.");
+};
 
-    if (!isValidEmail(email)) {
-      showNotification("Please enter a valid email", "error");
+const escapeHTML = (value = "") =>
+  String(value).replace(
+    /[&<>"']/g,
+    (character) =>
+      ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
+      })[character],
+  );
+
+const renderStaff = () => {
+  const list = document.getElementById("staffList");
+  const count = document.getElementById("staffCount");
+  if (!list || !count) return;
+
+  const staff = activeStaff;
+  count.textContent = `${staff.length} ${staff.length === 1 ? "staff member" : "staff members"}`;
+
+  if (!staff.length) {
+    list.innerHTML =
+      '<p class="directory-empty">No staff added yet. New staff records will appear here.</p>';
+    return;
+  }
+
+  list.innerHTML = staff
+    .map(
+      (person) => `
+    <article class="staff-item">
+      <div class="staff-avatar">${person.photo_url ? `<img src="${person.photo_url}" alt="" />` : `<span>${escapeHTML(person.name.slice(0, 1).toUpperCase())}</span>`}</div>
+      <div class="staff-details">
+        <h4>${escapeHTML(person.name)}</h4>
+        <p>${escapeHTML(person.position)}</p>
+        <p>${escapeHTML(person.staff_number)}</p>
+        ${person.phone ? `<p>${escapeHTML(person.phone)}</p>` : ""}
+        ${person.email ? `<p>${escapeHTML(person.email)}</p>` : ""}
+        <div class="staff-actions">
+          <button class="staff-card-action" type="button" data-action="photo" data-id="${escapeHTML(person.id)}">${person.photo_path ? "Change photo" : "Create ID card"}</button>
+          ${person.photo_path ? `<button class="staff-card-action secondary" type="button" data-action="print" data-id="${escapeHTML(person.id)}">Print ID</button>` : ""}
+          <button class="staff-card-action secondary" type="button" data-action="delete" data-id="${escapeHTML(person.id)}">Remove</button>
+        </div>
+      </div>
+    </article>
+  `,
+    )
+    .join("");
+
+  list.querySelectorAll("[data-action]").forEach((button) => {
+    button.addEventListener("click", () =>
+      handleStaffAction(button.dataset.action, button.dataset.id),
+    );
+  });
+};
+
+const handleStaffAction = async (action, staffId) => {
+  const person = activeStaff.find((record) => record.id === staffId);
+  if (!person) return;
+
+  if (action === "photo") {
+    const picker = document.createElement("input");
+    picker.type = "file";
+    picker.accept = "image/*";
+    picker.setAttribute("aria-label", `Choose ID photo for ${person.name}`);
+    picker.addEventListener("change", () => {
+      const file = picker.files?.[0];
+      if (!file) return;
+      if (!file.type.startsWith("image/")) {
+        showNotification("Choose an image file for the ID photo.", "error");
+        return;
+      }
+      const reader = new FileReader();
+      reader.addEventListener("load", () => {
+        const image = new Image();
+        image.addEventListener("load", () => {
+          const scale = Math.min(1, 600 / Math.max(image.width, image.height));
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.round(image.width * scale);
+          canvas.height = Math.round(image.height * scale);
+          canvas
+            .getContext("2d")
+            .drawImage(image, 0, 0, canvas.width, canvas.height);
+          canvas.toBlob(
+            async (blob) => {
+              if (!blob) {
+                showNotification(
+                  "Could not process the selected photo.",
+                  "error",
+                );
+                return;
+              }
+              const newPath = `${person.id}/${crypto.randomUUID()}.jpg`;
+              const { error: uploadError } = await supabaseClient.storage
+                .from(STAFF_BUCKET)
+                .upload(newPath, blob, { contentType: "image/jpeg" });
+              if (uploadError) {
+                showNotification(
+                  `Photo upload failed: ${uploadError.message}`,
+                  "error",
+                );
+                return;
+              }
+              const oldPath = person.photo_path;
+              const { error: updateError } = await supabaseClient
+                .from(STAFF_TABLE)
+                .update({ photo_path: newPath })
+                .eq("id", person.id);
+              if (updateError) {
+                await supabaseClient.storage
+                  .from(STAFF_BUCKET)
+                  .remove([newPath]);
+                showNotification(
+                  `Could not save photo reference: ${updateError.message}`,
+                  "error",
+                );
+                return;
+              }
+              if (oldPath)
+                await supabaseClient.storage
+                  .from(STAFF_BUCKET)
+                  .remove([oldPath]);
+              await loadStaff();
+              await renderIdCard(
+                activeStaff.find((entry) => entry.id === person.id),
+              );
+              showNotification(
+                "ID photo saved. Staff details were left unchanged.",
+              );
+            },
+            "image/jpeg",
+            0.82,
+          );
+        });
+        image.src = reader.result;
+      });
+      reader.readAsDataURL(file);
+    });
+    picker.click();
+    return;
+  }
+
+  if (action === "print") {
+    await renderIdCard(person);
+    window.print();
+    return;
+  }
+
+  if (
+    action === "delete" &&
+    window.confirm(`Remove ${person.name} from the staff directory?`)
+  ) {
+    if (person.photo_path) {
+      const { error: photoError } = await supabaseClient.storage
+        .from(STAFF_BUCKET)
+        .remove([person.photo_path]);
+      if (photoError)
+        showNotification(
+          `Could not remove photo: ${photoError.message}`,
+          "error",
+        );
+    }
+    const { error } = await supabaseClient
+      .from(STAFF_TABLE)
+      .delete()
+      .eq("id", staffId);
+    if (error) {
+      showNotification(
+        `Could not remove staff record: ${error.message}`,
+        "error",
+      );
       return;
     }
+    document.getElementById("printArea").replaceChildren();
+    await loadStaff();
+  }
+};
 
-    try {
-      // Upload photo
-      const fileName = `${Date.now()}_${photoFile.name}`;
-      const { data: uploadData, error: uploadError } = await supabase.storage
-        .from("staff-photos")
-        .upload(fileName, photoFile);
+const renderIdCard = async (person) => {
+  if (!person?.photo_path) {
+    showNotification("Add an ID photo before printing this card.", "error");
+    return;
+  }
+  const { data, error } = await supabaseClient.storage
+    .from(STAFF_BUCKET)
+    .createSignedUrl(person.photo_path, 3600);
+  if (error) {
+    showNotification(`Could not load ID photo: ${error.message}`, "error");
+    return;
+  }
+  const printArea = document.getElementById("printArea");
+  printArea.innerHTML = `
+    <div class="id-card-preview id-card-front">
+      <div class="id-card-brand">
+        <img class="id-card-logo" src="skyline%20logo.jpeg" alt="Skyline Terraform Limited" />
+        <div class="id-card-brand-copy">
+          <strong>STAFF IDENTIFICATION</strong>
+          <span>AUTHORIZED TEAM MEMBER</span>
+        </div>
+      </div>
+      <div class="id-card-body">
+        <img class="id-card-photo" src="${data.signedUrl}" alt="ID photo of ${escapeHTML(person.name)}" />
+        <div class="id-card-info">
+          <p class="id-card-label">${escapeHTML(person.staff_number)}</p>
+          <h3>${escapeHTML(person.name)}</h3>
+          <p class="id-card-position">${escapeHTML(person.position)}</p>
+          ${person.phone ? `<p>${escapeHTML(person.phone)}</p>` : ""}
+          ${person.email ? `<p>${escapeHTML(person.email)}</p>` : ""}
+        </div>
+      </div>
+      <div class="id-card-footer">PROPERTY OF SKYLINE TERRAFORM LIMITED <span>AUTHORIZED STAFF</span></div>
+    </div>`;
+  printArea.insertAdjacentHTML(
+    "beforeend",
+    `
+    <div class="id-card-preview id-card-back">
+      <div class="id-card-brand id-card-back-brand">
+        <img class="id-card-logo" src="skyline%20logo.jpeg" alt="Skyline Terraform Limited" />
+        <div class="id-card-brand-copy">
+          <strong>STAFF IDENTIFICATION</strong>
+          <span>AUTHORIZED TEAM MEMBER</span>
+        </div>
+      </div>
+      <div class="id-card-back-copy">
+        <strong>CARDHOLDER POLICY</strong>
+        <ul>
+          <li>For authorized staff use only. Do not lend or transfer.</li>
+          <li>Wear visibly on company premises and project sites.</li>
+          <li>Report lost, stolen, or damaged cards to management immediately.</li>
+          <li>Return when employment ends. This card remains Skyline Terraform Limited property.</li>
+        </ul>
+      </div>
+      <div class="id-card-return">
+        <strong>IF THIS CARD IS FOUND, PLEASE RETURN IT TO</strong>
+        <p>Skyline Terraform Limited · Lagos, Nigeria</p>
+        <p>+234 8114247254</p>
+        <p>skylineterraformlimited@gmail.com</p>
+      </div>
+      <div class="id-card-signatures">
+        <span><i></i> HOLDER SIGNATURE</span>
+        <span><i></i> AUTHORIZED SIGNATURE</span>
+      </div>
+      <div class="id-card-footer">CORPORATE STAFF IDENTIFICATION <span>NOT A GOVERNMENT ID</span></div>
+    </div>`,
+  );
+  await Promise.all(
+    Array.from(printArea.querySelectorAll("img"), (image) =>
+      image.decode().catch(() => undefined),
+    ),
+  );
+};
 
-      if (uploadError) throw uploadError;
-
-      const photoUrl = `${SUPABASE_URL}/storage/v1/object/public/staff-photos/${fileName}`;
-
-      // Insert to database
-      const { data, error } = await supabase
-        .from("staff")
-        .insert([{ name, position, email, phone, photo_url: photoUrl }])
-        .select();
-
-      if (error) throw error;
-
-      showNotification("Staff member added successfully!", "success");
-      document.querySelector(".add-staff-form").reset();
-      loadStaff();
-
-      // Switch to list tab
-      document.getElementById("list-tab").classLis
-      
 // ============ CAROUSEL FUNCTIONALITY ============
 const initializeCarousel = () => {
   const track = document.querySelector(".carousel-track");

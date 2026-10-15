@@ -14,8 +14,7 @@
       rel="stylesheet"
     />
     <title>Skyline Terraform | Built with intent</title>
-    <link rel="stylesheet" href="skyline.css?v=2" />
-    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <link rel="stylesheet" href="skyline.css?v=3" />
   </head>
   <body>
     <!-- HEADER -->
@@ -431,6 +430,137 @@
       </button>
     </section>
 
+    <!-- ADMIN SIGN-IN -->
+    <section
+      class="admin-login"
+      id="adminLogin"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="adminLoginTitle"
+      hidden
+    >
+      <form id="adminLoginForm" class="admin-login-form">
+        <button
+          class="admin-login-close"
+          type="button"
+          data-admin-close
+          aria-label="Close sign in"
+        >
+          &times;
+        </button>
+        <div class="eyebrow dark"><span></span> Restricted access</div>
+        <h2 id="adminLoginTitle">Staff admin</h2>
+        <p>Sign in with your authorized Skyline administrator account.</p>
+        <label class="admin-field">
+          <span>Username</span>
+          <input
+            id="adminUsername"
+            type="text"
+            autocomplete="username"
+            placeholder="kunz"
+            required
+          />
+        </label>
+        <label class="admin-field">
+          <span>Password</span>
+          <input
+            id="adminPassword"
+            type="password"
+            autocomplete="current-password"
+            required
+          />
+        </label>
+        <p class="admin-login-message" id="adminLoginMessage" role="status"></p>
+        <button class="btn-primary" type="submit">
+          Sign in <span>↗</span>
+        </button>
+      </form>
+    </section>
+
+    <!-- STAFF ADMIN -->
+    <section class="admin-panel" id="admin" hidden>
+      <div class="section-header">
+        <div>
+          <div class="eyebrow dark"><span></span> Staff directory</div>
+          <h2>Staff Admin</h2>
+        </div>
+        <p>
+          Add and manage staff records, then create printable company ID cards.
+        </p>
+        <button class="admin-signout" id="adminSignOut" type="button">
+          Sign out
+        </button>
+      </div>
+
+      <div class="admin-layout">
+        <div class="admin-entry">
+          <h3>Add staff member</h3>
+          <form class="add-staff-form" id="staffForm">
+            <label class="admin-field">
+              <span>Full name</span>
+              <input
+                id="staffName"
+                name="name"
+                type="text"
+                placeholder="e.g. Ada Okafor"
+                required
+              />
+            </label>
+            <label class="admin-field">
+              <span>Position</span>
+              <input
+                id="staffPosition"
+                name="position"
+                type="text"
+                placeholder="e.g. Project Architect"
+                required
+              />
+            </label>
+            <label class="admin-field">
+              <span>Email address</span>
+              <input
+                id="staffEmail"
+                name="email"
+                type="email"
+                placeholder="name@skyline.ng"
+              />
+            </label>
+            <label class="admin-field">
+              <span>Phone number</span>
+              <input
+                id="staffPhone"
+                name="phone"
+                type="tel"
+                placeholder="+234 800 000 0000"
+              />
+            </label>
+            <label class="admin-field">
+              <span>Staff ID</span>
+              <input
+                id="staffNumber"
+                name="staffNumber"
+                type="text"
+                placeholder="ST-001"
+              />
+            </label>
+            <button class="btn-primary" type="submit">
+              Add staff record <span>+</span>
+            </button>
+          </form>
+        </div>
+
+        <div class="admin-directory">
+          <div class="directory-heading">
+            <h3>Staff directory</h3>
+            <span id="staffCount">0 staff</span>
+          </div>
+          <p class="admin-data-message" id="adminDataMessage" role="status"></p>
+          <div class="staff-list" id="staffList" aria-live="polite"></div>
+        </div>
+      </div>
+      <div id="printArea" aria-live="polite"></div>
+    </section>
+
     <!-- CONTACT -->
     <section class="contact" id="contact">
       <div class="section-header">
@@ -518,59 +648,6 @@
       </div>
     </section>
 
-    <!-- ADMIN PANEL -->
-    <section class="admin-panel" id="admin">
-      <div class="admin-container">
-        <h2>Staff Management</h2>
-
-        <div class="admin-tabs">
-          <button class="tab-btn active" onclick="switchTab('add')">
-            Add Staff
-          </button>
-          <button class="tab-btn" onclick="switchTab('list')">
-            Staff Directory
-          </button>
-        </div>
-
-        <div id="add-tab" class="tab-content active">
-          <div class="add-staff-form">
-            <input
-              type="text"
-              id="staffName"
-              placeholder="Full Name"
-              required
-            />
-            <input
-              type="text"
-              id="staffPosition"
-              placeholder="Position/Title"
-              required
-            />
-            <input
-              type="email"
-              id="staffEmail"
-              placeholder="Email Address"
-              required
-            />
-            <input
-              type="tel"
-              id="staffPhone"
-              placeholder="Phone Number"
-              required
-            />
-            <input type="file" id="staffPhoto" accept="image/*" required />
-            <button class="btn-primary" onclick="addStaff()">
-              Add Staff Member
-            </button>
-          </div>
-        </div>
-
-        <div id="list-tab" class="tab-content">
-          <div class="staff-list" id="staffList"></div>
-        </div>
-      </div>
-    </section>
-
     <!-- FOOTER -->
     <footer>
       <footer-content>
@@ -596,6 +673,7 @@
             <li><a href="#about">About Us</a></li>
             <li><a href="#portfolio">Portfolio</a></li>
             <li><a href="#contact">Contact</a></li>
+            <li><a href="#admin" data-admin-open>Staff admin</a></li>
             <li><a href="#">Privacy Policy</a></li>
           </ul>
         </div>
@@ -610,10 +688,12 @@
         </div>
       </footer-content>
       <div class="footer-bottom">
-        <p>&copy; 2024 Skyline Terraform Limited. All rights reserved.</p>
+        <p>&copy; 2026 Skyline Terraform Limited. All rights reserved.</p>
       </div>
     </footer>
 
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+    <script src="supabase-config.js"></script>
     <script src="skyline.js"></script>
   </body>
 </html>

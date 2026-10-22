@@ -616,6 +616,7 @@ const renderStaff = () => {
         ${person.email ? `<p>${escapeHTML(person.email)}</p>` : ""}
         <div class="staff-actions">
           <button class="staff-card-action" type="button" data-action="photo" data-id="${escapeHTML(person.id)}">${person.photo_path ? "Change photo" : "Create ID card"}</button>
+          ${person.photo_path ? `<button class="staff-card-action secondary" type="button" data-action="adjust-photo" data-id="${escapeHTML(person.id)}">Adjust photo</button>` : ""}
           ${person.photo_path ? `<button class="staff-card-action secondary" type="button" data-action="print" data-id="${escapeHTML(person.id)}">Print ID</button>` : ""}
           <button class="staff-card-action secondary" type="button" data-action="delete" data-id="${escapeHTML(person.id)}">Remove</button>
         </div>
@@ -636,6 +637,33 @@ const handleStaffAction = async (action, staffId) => {
   const person = activeStaff.find((record) => record.id === staffId);
   if (!person) return;
 
+  if (action === "adjust-photo") {
+    try {
+      const { data, error } = await supabaseClient.storage
+        .from(STAFF_BUCKET)
+        .createSignedUrl(person.photo_path, 3600);
+      if (error) throw error;
+      const response = await fetch(data.signedUrl);
+      if (!response.ok) throw new Error("Could not load the saved photo.");
+      const imageUrl = URL.createObjectURL(await response.blob());
+      const image = new Image();
+      image.addEventListener("load", () =>
+        openPhotoCropper(image, person, () => URL.revokeObjectURL(imageUrl)),
+      );
+      image.addEventListener("error", () => {
+        URL.revokeObjectURL(imageUrl);
+        showNotification(
+          "Could not load the saved photo for editing.",
+          "error",
+        );
+      });
+      image.src = imageUrl;
+    } catch (error) {
+      showNotification(`Could not open saved photo: ${error.message}`, "error");
+    }
+    return;
+  }
+
   if (action === "photo") {
     const picker = document.createElement("input");
     picker.type = "file";
@@ -652,63 +680,7 @@ const handleStaffAction = async (action, staffId) => {
       reader.addEventListener("load", () => {
         const image = new Image();
         image.addEventListener("load", () => {
-          const scale = Math.min(1, 600 / Math.max(image.width, image.height));
-          const canvas = document.createElement("canvas");
-          canvas.width = Math.round(image.width * scale);
-          canvas.height = Math.round(image.height * scale);
-          canvas
-            .getContext("2d")
-            .drawImage(image, 0, 0, canvas.width, canvas.height);
-          canvas.toBlob(
-            async (blob) => {
-              if (!blob) {
-                showNotification(
-                  "Could not process the selected photo.",
-                  "error",
-                );
-                return;
-              }
-              const newPath = `${person.id}/${crypto.randomUUID()}.jpg`;
-              const { error: uploadError } = await supabaseClient.storage
-                .from(STAFF_BUCKET)
-                .upload(newPath, blob, { contentType: "image/jpeg" });
-              if (uploadError) {
-                showNotification(
-                  `Photo upload failed: ${uploadError.message}`,
-                  "error",
-                );
-                return;
-              }
-              const oldPath = person.photo_path;
-              const { error: updateError } = await supabaseClient
-                .from(STAFF_TABLE)
-                .update({ photo_path: newPath })
-                .eq("id", person.id);
-              if (updateError) {
-                await supabaseClient.storage
-                  .from(STAFF_BUCKET)
-                  .remove([newPath]);
-                showNotification(
-                  `Could not save photo reference: ${updateError.message}`,
-                  "error",
-                );
-                return;
-              }
-              if (oldPath)
-                await supabaseClient.storage
-                  .from(STAFF_BUCKET)
-                  .remove([oldPath]);
-              await loadStaff();
-              await renderIdCard(
-                activeStaff.find((entry) => entry.id === person.id),
-              );
-              showNotification(
-                "ID photo saved. Staff details were left unchanged.",
-              );
-            },
-            "image/jpeg",
-            0.82,
-          );
+          openPhotoCropper(image, person);
         });
         image.src = reader.result;
       });
@@ -754,6 +726,189 @@ const handleStaffAction = async (action, staffId) => {
   }
 };
 
+const openPhotoCropper = (image, person, onClose = () => {}) => {
+  const viewport = document.createElement("div");
+  viewport.className = "photo-crop-viewport";
+  viewport.tabIndex = 0;
+  viewport.setAttribute("role", "img");
+  viewport.setAttribute("aria-label", "Drag photo to adjust its framing");
+  const preview = document.createElement("img");
+  preview.src = image.src;
+  preview.alt = "";
+  viewport.append(preview);
+
+  const modal = document.createElement("section");
+  modal.className = "photo-crop-modal";
+  modal.setAttribute("role", "dialog");
+  modal.setAttribute("aria-modal", "true");
+  modal.setAttribute("aria-labelledby", "photoCropTitle");
+  modal.innerHTML = `
+    <div class="photo-crop-panel">
+      <button class="admin-login-close" type="button" data-crop-cancel aria-label="Close photo editor">&times;</button>
+      <p class="eyebrow dark"><span></span> ID photo</p>
+      <h2 id="photoCropTitle">Adjust photo</h2>
+      <p class="photo-crop-hint">Drag the image to reposition it. Use the slider to zoom.</p>
+      <div class="photo-crop-control">
+        <label for="photoZoom">Zoom</label>
+        <input id="photoZoom" type="range" min="1" max="3" step="0.01" value="1" />
+      </div>
+      <div class="photo-crop-actions">
+        <button class="staff-card-action secondary" type="button" data-crop-cancel>Cancel</button>
+        <button class="staff-card-action" type="button" data-crop-save>Save photo</button>
+      </div>
+    </div>`;
+  modal
+    .querySelector(".photo-crop-panel")
+    .insertBefore(viewport, modal.querySelector(".photo-crop-control"));
+  document.body.append(modal);
+
+  const zoom = modal.querySelector("#photoZoom");
+  let scale = 1;
+  let offsetX = 0;
+  let offsetY = 0;
+  let dragStart = null;
+  let saving = false;
+
+  const clampOffsets = () => {
+    const rect = viewport.getBoundingClientRect();
+    const coverScale = Math.max(
+      rect.width / image.naturalWidth,
+      rect.height / image.naturalHeight,
+    );
+    const maxX = Math.max(
+      0,
+      (image.naturalWidth * coverScale * scale - rect.width) / 2,
+    );
+    const maxY = Math.max(
+      0,
+      (image.naturalHeight * coverScale * scale - rect.height) / 2,
+    );
+    offsetX = Math.max(-maxX, Math.min(maxX, offsetX));
+    offsetY = Math.max(-maxY, Math.min(maxY, offsetY));
+  };
+  const updatePreview = () => {
+    clampOffsets();
+    const rect = viewport.getBoundingClientRect();
+    const coverScale = Math.max(
+      rect.width / image.naturalWidth,
+      rect.height / image.naturalHeight,
+    );
+    preview.style.width = `${image.naturalWidth * coverScale}px`;
+    preview.style.height = `${image.naturalHeight * coverScale}px`;
+    preview.style.left = `calc(50% + ${offsetX}px)`;
+    preview.style.top = `calc(50% + ${offsetY}px)`;
+    preview.style.transform = `translate(-50%, -50%) scale(${scale})`;
+  };
+  let closed = false;
+  const close = () => {
+    modal.remove();
+    if (!closed) onClose();
+    closed = true;
+  };
+  const pointerDown = (event) => {
+    event.preventDefault();
+    dragStart = { x: event.clientX - offsetX, y: event.clientY - offsetY };
+    viewport.setPointerCapture(event.pointerId);
+  };
+  const pointerMove = (event) => {
+    if (!dragStart) return;
+    offsetX = event.clientX - dragStart.x;
+    offsetY = event.clientY - dragStart.y;
+    updatePreview();
+  };
+  const pointerUp = () => {
+    dragStart = null;
+  };
+
+  viewport.addEventListener("pointerdown", pointerDown);
+  viewport.addEventListener("pointermove", pointerMove);
+  viewport.addEventListener("pointerup", pointerUp);
+  viewport.addEventListener("pointercancel", pointerUp);
+  zoom.addEventListener("input", () => {
+    scale = Number(zoom.value);
+    updatePreview();
+  });
+  updatePreview();
+  modal
+    .querySelectorAll("[data-crop-cancel]")
+    .forEach((button) => button.addEventListener("click", close));
+  modal.addEventListener("click", (event) => {
+    if (event.target === modal) close();
+  });
+
+  const saveButton = modal.querySelector("[data-crop-save]");
+  modal
+    .querySelector("[data-crop-save]")
+    .addEventListener("click", async () => {
+      if (saving) return;
+      saving = true;
+      saveButton.disabled = true;
+      const rect = viewport.getBoundingClientRect();
+      const sourceScale = Math.max(
+        rect.width / image.naturalWidth,
+        rect.height / image.naturalHeight,
+      );
+      const drawnWidth = image.naturalWidth * sourceScale * scale;
+      const drawnHeight = image.naturalHeight * sourceScale * scale;
+      const drawnX = (rect.width - drawnWidth) / 2 + offsetX;
+      const drawnY = (rect.height - drawnHeight) / 2 + offsetY;
+      const canvas = document.createElement("canvas");
+      canvas.width = 900;
+      canvas.height = Math.round(canvas.width * (rect.height / rect.width));
+      const context = canvas.getContext("2d");
+      context.drawImage(
+        image,
+        drawnX * (canvas.width / rect.width),
+        drawnY * (canvas.height / rect.height),
+        drawnWidth * (canvas.width / rect.width),
+        drawnHeight * (canvas.height / rect.height),
+      );
+      const blob = await new Promise((resolve) =>
+        canvas.toBlob(resolve, "image/jpeg", 0.9),
+      );
+      if (!blob) {
+        saving = false;
+        saveButton.disabled = false;
+        showNotification("Could not process the selected photo.", "error");
+        return;
+      }
+      const newPath = `${person.id}/${crypto.randomUUID()}.jpg`;
+      const { error: uploadError } = await supabaseClient.storage
+        .from(STAFF_BUCKET)
+        .upload(newPath, blob, { contentType: "image/jpeg" });
+      if (uploadError) {
+        saving = false;
+        saveButton.disabled = false;
+        showNotification(
+          `Photo upload failed: ${uploadError.message}`,
+          "error",
+        );
+        return;
+      }
+      const oldPath = person.photo_path;
+      const { error: updateError } = await supabaseClient
+        .from(STAFF_TABLE)
+        .update({ photo_path: newPath })
+        .eq("id", person.id);
+      if (updateError) {
+        await supabaseClient.storage.from(STAFF_BUCKET).remove([newPath]);
+        saving = false;
+        saveButton.disabled = false;
+        showNotification(
+          `Could not save photo reference: ${updateError.message}`,
+          "error",
+        );
+        return;
+      }
+      if (oldPath)
+        await supabaseClient.storage.from(STAFF_BUCKET).remove([oldPath]);
+      close();
+      await loadStaff();
+      await renderIdCard(activeStaff.find((entry) => entry.id === person.id));
+      showNotification("Adjusted ID photo saved.");
+    });
+};
+
 const renderIdCard = async (person) => {
   if (!person?.photo_path) {
     showNotification("Add an ID photo before printing this card.", "error");
@@ -769,58 +924,43 @@ const renderIdCard = async (person) => {
   const printArea = document.getElementById("printArea");
   printArea.innerHTML = `
     <div class="id-card-preview id-card-front">
-      <div class="id-card-brand">
-        <img class="id-card-logo" src="skyline%20logo.jpeg" alt="Skyline Terraform Limited" />
-        <div class="id-card-brand-copy">
-          <strong>STAFF IDENTIFICATION</strong>
-          <span>AUTHORIZED TEAM MEMBER</span>
-        </div>
-      </div>
-      <div class="id-card-body">
-        <img class="id-card-photo" src="${data.signedUrl}" alt="ID photo of ${escapeHTML(person.name)}" />
+      <img class="id-card-photo" src="${data.signedUrl}" alt="ID photo of ${escapeHTML(person.name)}" />
+      <div class="id-card-nameplate">
         <div class="id-card-info">
-          <p class="id-card-label">${escapeHTML(person.staff_number)}</p>
           <h3>${escapeHTML(person.name)}</h3>
           <p class="id-card-position">${escapeHTML(person.position)}</p>
-          ${person.phone ? `<p>${escapeHTML(person.phone)}</p>` : ""}
-          ${person.email ? `<p>${escapeHTML(person.email)}</p>` : ""}
+        </div>
+        <div class="id-card-code">
+          <svg class="id-card-barcode" role="img" aria-label="Staff record barcode"></svg>
+          <span>ID ${escapeHTML(person.staff_number || "")}</span>
         </div>
       </div>
-      <div class="id-card-footer">PROPERTY OF SKYLINE TERRAFORM LIMITED <span>AUTHORIZED STAFF</span></div>
     </div>`;
   printArea.insertAdjacentHTML(
     "beforeend",
     `
     <div class="id-card-preview id-card-back">
-      <div class="id-card-brand id-card-back-brand">
-        <img class="id-card-logo" src="skyline%20logo.jpeg" alt="Skyline Terraform Limited" />
-        <div class="id-card-brand-copy">
-          <strong>STAFF IDENTIFICATION</strong>
-          <span>AUTHORIZED TEAM MEMBER</span>
-        </div>
-      </div>
-      <div class="id-card-back-copy">
-        <strong>CARDHOLDER POLICY</strong>
-        <ul>
-          <li>For authorized staff use only. Do not lend or transfer.</li>
-          <li>Wear visibly on company premises and project sites.</li>
-          <li>Report lost, stolen, or damaged cards to management immediately.</li>
-          <li>Return when employment ends. This card remains Skyline Terraform Limited property.</li>
-        </ul>
-      </div>
-      <div class="id-card-return">
-        <strong>IF THIS CARD IS FOUND, PLEASE RETURN IT TO</strong>
-        <p>Skyline Terraform Limited · Lagos, Nigeria</p>
-        <p>+234 8114247254</p>
-        <p>skylineterraformlimited@gmail.com</p>
-      </div>
-      <div class="id-card-signatures">
-        <span><i></i> HOLDER SIGNATURE</span>
-        <span><i></i> AUTHORIZED SIGNATURE</span>
-      </div>
-      <div class="id-card-footer">CORPORATE STAFF IDENTIFICATION <span>NOT A GOVERNMENT ID</span></div>
+      <img class="id-card-logo" src="skyline-logo-transparent.png" alt="Skyline Terraform Limited logo" />
     </div>`,
   );
+  const barcode = printArea.querySelector(".id-card-barcode");
+  if (typeof JsBarcode !== "function" || !person.id) {
+    printArea.replaceChildren();
+    showNotification(
+      "Could not create a secure staff record barcode.",
+      "error",
+    );
+    return;
+  }
+  JsBarcode(barcode, person.id, {
+    format: "CODE128",
+    displayValue: false,
+    height: 36,
+    margin: 0,
+    width: 1.2,
+    lineColor: "#171918",
+    background: "#fff",
+  });
   await Promise.all(
     Array.from(printArea.querySelectorAll("img"), (image) =>
       image.decode().catch(() => undefined),
